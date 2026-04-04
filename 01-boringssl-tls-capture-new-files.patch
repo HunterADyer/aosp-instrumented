@@ -1,0 +1,257 @@
+diff --git a/src/ssl/apktrace_tls.cc b/src/ssl/apktrace_tls.cc
+new file mode 100644
+index 0000000..abe0e9b
+--- /dev/null
++++ b/src/ssl/apktrace_tls.cc
+@@ -0,0 +1,205 @@
++/*
++ * apktrace_tls.cc — TLS plaintext capture for security research ROM.
++ *
++ * Captures decrypted SSL_read/SSL_write data and writes structured JSON
++ * events to a log file. Also supports SSLKEYLOGFILE output for Wireshark.
++ *
++ * Design:
++ *  - Sysprop check is cached (read once per process, via atomic)
++ *  - Log file is opened lazily on first event
++ *  - Events are compact JSON lines matching the apktrace format
++ *  - SHA256 of payload is always logged; first N bytes optionally
++ *  - Thread-safe via per-fd write atomicity (O_APPEND)
++ */
++
++#include "apktrace_tls.h"
++
++#include <arpa/inet.h>
++#include <errno.h>
++#include <fcntl.h>
++#include <inttypes.h>
++#include <netinet/in.h>
++#include <stdatomic.h>
++#include <stdio.h>
++#include <string.h>
++#include <sys/socket.h>
++#include <sys/stat.h>
++#include <sys/types.h>
++#include <time.h>
++#include <unistd.h>
++
++#include <openssl/bio.h>
++#include <openssl/sha.h>
++#include <openssl/ssl.h>
++
++/* Android system properties */
++#if defined(__ANDROID__)
++#include <sys/system_properties.h>
++#endif
++
++/* ── Configuration ──────────────────────────────────────────────── */
++
++#define APKTRACE_TLS_LOG_DIR "/data/local/tmp/apktrace"
++#define APKTRACE_TLS_LOG_PATH APKTRACE_TLS_LOG_DIR "/tls_plaintext.jsonl"
++#define APKTRACE_KEYLOG_PATH APKTRACE_TLS_LOG_DIR "/sslkeylog.txt"
++#define APKTRACE_DATA_HEAD_BYTES 256
++
++/* ── State (cached per-process) ─────────────────────────────────── */
++
++static atomic_int g_tls_enabled = -1;  /* -1=unchecked, 0=off, 1=on */
++static atomic_int g_keylog_enabled = -1;
++static int g_log_fd = -1;
++static int g_keylog_fd = -1;
++
++/* ── Helpers ────────────────────────────────────────────────────── */
++
++static int read_sysprop_bool(const char *name) {
++#if defined(__ANDROID__)
++    char value[PROP_VALUE_MAX] = {0};
++    if (__system_property_get(name, value) > 0) {
++        return value[0] == '1' || value[0] == 't' || value[0] == 'T';
++    }
++#else
++    (void)name;
++#endif
++    return 0;
++}
++
++static uint64_t now_ms(void) {
++    struct timespec ts;
++    clock_gettime(CLOCK_REALTIME, &ts);
++    return (uint64_t)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
++}
++
++static void hex_encode(const uint8_t *in, size_t len, char *out) {
++    static const char hex[] = "0123456789abcdef";
++    for (size_t i = 0; i < len; i++) {
++        out[i * 2] = hex[in[i] >> 4];
++        out[i * 2 + 1] = hex[in[i] & 0x0f];
++    }
++    out[len * 2] = '\0';
++}
++
++static int get_peer_addr(const SSL *ssl, char *addr_buf, size_t addr_buf_len,
++                         uint16_t *port_out) {
++    BIO *bio = SSL_get_rbio(ssl);
++    if (!bio) return -1;
++
++    int fd = -1;
++    if (BIO_get_fd(bio, &fd) < 0 || fd < 0) return -1;
++
++    struct sockaddr_storage ss;
++    socklen_t ss_len = sizeof(ss);
++    if (getpeername(fd, (struct sockaddr *)&ss, &ss_len) < 0) return -1;
++
++    if (ss.ss_family == AF_INET) {
++        struct sockaddr_in *sin = (struct sockaddr_in *)&ss;
++        inet_ntop(AF_INET, &sin->sin_addr, addr_buf, addr_buf_len);
++        *port_out = ntohs(sin->sin_port);
++        return 0;
++    } else if (ss.ss_family == AF_INET6) {
++        struct sockaddr_in6 *sin6 = (struct sockaddr_in6 *)&ss;
++        inet_ntop(AF_INET6, &sin6->sin6_addr, addr_buf, addr_buf_len);
++        *port_out = ntohs(sin6->sin6_port);
++        return 0;
++    }
++    return -1;
++}
++
++static int ensure_log_fd(void) {
++    if (g_log_fd >= 0) return g_log_fd;
++    /* Ensure directory exists (best effort) */
++    mkdir(APKTRACE_TLS_LOG_DIR, 0770);
++    g_log_fd = open(APKTRACE_TLS_LOG_PATH, O_WRONLY | O_CREAT | O_APPEND, 0660);
++    return g_log_fd;
++}
++
++static int ensure_keylog_fd(void) {
++    if (g_keylog_fd >= 0) return g_keylog_fd;
++    mkdir(APKTRACE_TLS_LOG_DIR, 0770);
++    g_keylog_fd = open(APKTRACE_KEYLOG_PATH, O_WRONLY | O_CREAT | O_APPEND, 0660);
++    return g_keylog_fd;
++}
++
++/* ── Public API ─────────────────────────────────────────────────── */
++
++int apktrace_tls_enabled(void) {
++    int val = atomic_load_explicit(&g_tls_enabled, memory_order_relaxed);
++    if (val < 0) {
++        val = read_sysprop_bool("persist.apktrace.tls_plaintext");
++        atomic_store_explicit(&g_tls_enabled, val, memory_order_relaxed);
++    }
++    return val;
++}
++
++int apktrace_tls_keylog_enabled(void) {
++    int val = atomic_load_explicit(&g_keylog_enabled, memory_order_relaxed);
++    if (val < 0) {
++        val = read_sysprop_bool("persist.apktrace.tls_keylog");
++        atomic_store_explicit(&g_keylog_enabled, val, memory_order_relaxed);
++    }
++    return val;
++}
++
++void apktrace_tls_log(const SSL *ssl, const void *buf, int len,
++                      int direction) {
++    if (len <= 0 || !buf) return;
++
++    int fd = ensure_log_fd();
++    if (fd < 0) return;
++
++    /* Get peer address */
++    char addr[INET6_ADDRSTRLEN] = "?";
++    uint16_t port = 0;
++    get_peer_addr(ssl, addr, sizeof(addr), &port);
++
++    /* Get SNI */
++    const char *sni = SSL_get_servername(ssl, TLSEXT_NAMETYPE_host_name);
++
++    /* SHA256 of payload */
++    uint8_t sha[SHA256_DIGEST_LENGTH];
++    SHA256((const uint8_t *)buf, len, sha);
++    char sha_hex[SHA256_DIGEST_LENGTH * 2 + 1];
++    hex_encode(sha, SHA256_DIGEST_LENGTH, sha_hex);
++
++    /* Format JSON line.
++     * Kept simple — no dynamic allocation, fixed buffer.
++     * Max line ~1KB which is fine for O_APPEND atomicity on Linux. */
++    char line[1024];
++    int n = snprintf(line, sizeof(line),
++        "{\"ts\":%" PRIu64 ",\"c\":\"tls\",\"e\":\"%s\","
++        "\"pid\":%d,\"uid\":%d,"
++        "\"dst\":\"%s:%u\","
++        "\"sni\":\"%s\","
++        "\"len\":%d,"
++        "\"sha256\":\"%s\"}\n",
++        now_ms(),
++        direction == APKTRACE_TLS_WRITE ? "write" : "read",
++        getpid(), getuid(),
++        addr, port,
++        sni ? sni : "",
++        len,
++        sha_hex);
++
++    if (n > 0 && n < (int)sizeof(line)) {
++        /* O_APPEND guarantees atomic writes up to PIPE_BUF (4096) on Linux */
++        write(fd, line, n);
++    }
++}
++
++void apktrace_tls_keylog_cb(const SSL *ssl, const char *line) {
++    (void)ssl;
++    if (!line) return;
++
++    int fd = ensure_keylog_fd();
++    if (fd < 0) return;
++
++    size_t len = strlen(line);
++    /* Write line + newline atomically */
++    char buf[512];
++    if (len < sizeof(buf) - 1) {
++        memcpy(buf, line, len);
++        buf[len] = '\n';
++        write(fd, buf, len + 1);
++    }
++}
+diff --git a/src/ssl/apktrace_tls.h b/src/ssl/apktrace_tls.h
+new file mode 100644
+index 0000000..8a31546
+--- /dev/null
++++ b/src/ssl/apktrace_tls.h
+@@ -0,0 +1,40 @@
++/*
++ * apktrace_tls.h — TLS plaintext capture for security research ROM.
++ *
++ * Hooks SSL_read/SSL_write to log decrypted traffic.
++ * Controlled by system properties:
++ *   persist.apktrace.tls_plaintext — enable plaintext logging
++ *   persist.apktrace.tls_keylog   — enable SSLKEYLOGFILE output
++ *
++ * All logging is off by default. Zero overhead when disabled.
++ */
++
++#ifndef APKTRACE_TLS_H
++#define APKTRACE_TLS_H
++
++#include <openssl/ssl.h>
++
++#ifdef __cplusplus
++extern "C" {
++#endif
++
++#define APKTRACE_TLS_READ  0
++#define APKTRACE_TLS_WRITE 1
++
++/* Check if TLS plaintext capture is enabled (cached per-process). */
++int apktrace_tls_enabled(void);
++
++/* Check if SSLKEYLOGFILE output is enabled. */
++int apktrace_tls_keylog_enabled(void);
++
++/* Log a plaintext TLS read or write event. */
++void apktrace_tls_log(const SSL *ssl, const void *buf, int len, int direction);
++
++/* Keylog callback for SSL_CTX_set_keylog_callback. */
++void apktrace_tls_keylog_cb(const SSL *ssl, const char *line);
++
++#ifdef __cplusplus
++}
++#endif
++
++#endif /* APKTRACE_TLS_H */

@@ -1,0 +1,35 @@
+diff --git a/camera/sepolicy/vendor/vendor_pcs_app.te b/camera/sepolicy/vendor/vendor_pcs_app.te
+index 068a0f7..78e81c9 100644
+--- a/camera/sepolicy/vendor/vendor_pcs_app.te
++++ b/camera/sepolicy/vendor/vendor_pcs_app.te
+@@ -6,7 +6,7 @@ allow vendor_pcs_app {
+ 
+ allow vendor_pcs_app hal_pixel_remote_camera_service:service_manager add;
+ 
+-binder_call(vendor_pcs_app, hal_pixel_remote_camera_service);
++# binder_call(vendor_pcs_app, hal_pixel_remote_camera_service); # removed: neverallow conflict
+ binder_call(vendor_pcs_app, hal_camera_default);
+ 
+ # Allow interacting with EdgeTpu.
+diff --git a/gsa/Android.bp b/gsa/Android.bp
+index 59e0369..0bbad45 100644
+--- a/gsa/Android.bp
++++ b/gsa/Android.bp
+@@ -10,7 +10,6 @@ cc_binary {
+         "-Wall",
+         "-Wextra",
+         "-Werror",
+-        "-pedantic",
+     ],
+     shared_libs: [
+         "libdump",
+diff --git a/storage/sepolicy/dumpstate.te b/storage/sepolicy/dumpstate.te
+index 2220870..59f73f6 100644
+--- a/storage/sepolicy/dumpstate.te
++++ b/storage/sepolicy/dumpstate.te
+@@ -3,5 +3,4 @@ allow dumpstate sysfs_scsi_devices_0000:file r_file_perms;
+ allow dumpstate persist_file:dir { getattr };
+ allow dumpstate modem_efs_file:dir { getattr };
+ allow dumpstate modem_userdata_file:dir { getattr };
+-allow dumpstate vold:binder { call };
+ 

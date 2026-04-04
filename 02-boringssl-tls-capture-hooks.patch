@@ -1,0 +1,59 @@
+diff --git a/sources.bp b/sources.bp
+index de97479..5a97459 100644
+--- a/sources.bp
++++ b/sources.bp
+@@ -459,6 +459,7 @@ cc_defaults {
+         "src/ssl/ssl_credential.cc",
+         "src/ssl/ssl_file.cc",
+         "src/ssl/ssl_key_share.cc",
++        "src/ssl/apktrace_tls.cc",
+         "src/ssl/ssl_lib.cc",
+         "src/ssl/ssl_privkey.cc",
+         "src/ssl/ssl_session.cc",
+diff --git a/src/ssl/ssl_lib.cc b/src/ssl/ssl_lib.cc
+index 24c0d49..7d2ba9f 100644
+--- a/src/ssl/ssl_lib.cc
++++ b/src/ssl/ssl_lib.cc
+@@ -34,6 +34,7 @@
+ 
+ #include "../crypto/internal.h"
+ #include "internal.h"
++#include "apktrace_tls.h"
+ 
+ #if defined(OPENSSL_WINDOWS)
+ #include <sys/timeb.h>
+@@ -454,6 +455,11 @@ SSL_CTX *SSL_CTX_new(const SSL_METHOD *method) {
+     return nullptr;
+   }
+ 
++  // apktrace: register keylog callback for TLS session key export
++  if (apktrace_tls_keylog_enabled()) {
++    SSL_CTX_set_keylog_callback(ret.get(), apktrace_tls_keylog_cb);
++  }
++
+   return ret.release();
+ }
+ 
+@@ -920,6 +926,10 @@ int SSL_read(SSL *ssl, void *buf, int num) {
+   if (ssl->s3->pending_app_data.empty()) {
+     ssl->s3->read_buffer.DiscardConsumed();
+   }
++  // apktrace: log decrypted plaintext
++  if (ret > 0 && apktrace_tls_enabled()) {
++    apktrace_tls_log(ssl, buf, ret, APKTRACE_TLS_READ);
++  }
+   return ret;
+ }
+ 
+@@ -945,6 +955,11 @@ int SSL_peek(SSL *ssl, void *buf, int num) {
+ int SSL_write(SSL *ssl, const void *buf, int num) {
+   ssl_reset_error_state(ssl);
+ 
++  // apktrace: log plaintext before encryption
++  if (num > 0 && buf && apktrace_tls_enabled()) {
++    apktrace_tls_log(ssl, buf, num, APKTRACE_TLS_WRITE);
++  }
++
+   if (SSL_is_quic(ssl)) {
+     OPENSSL_PUT_ERROR(SSL, ERR_R_SHOULD_NOT_HAVE_BEEN_CALLED);
+     return -1;

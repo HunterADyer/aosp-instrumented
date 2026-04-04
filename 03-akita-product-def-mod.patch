@@ -1,0 +1,17 @@
+diff --git a/AndroidProducts.mk b/AndroidProducts.mk
+index e651e7a..01f02e0 100644
+--- a/AndroidProducts.mk
++++ b/AndroidProducts.mk
+@@ -16,9 +16,11 @@
+ 
+ PRODUCT_MAKEFILES := \
+     $(LOCAL_DIR)/aosp_akita.mk \
++    $(LOCAL_DIR)/aosp_akita_research.mk \
+     $(LOCAL_DIR)/aosp_akita_16k.mk \
+     $(LOCAL_DIR)/aosp_akita_fullmte.mk \
+     $(LOCAL_DIR)/factory_akita.mk
+ 
+ COMMON_LUNCH_CHOICES := \
+-    aosp_akita-trunk_staging-userdebug
++    aosp_akita-trunk_staging-userdebug \
++    aosp_akita_research-trunk_staging-userdebug

@@ -1,0 +1,13 @@
+diff --git a/device-akita.mk b/device-akita.mk
+index a5c1933..5960638 100644
+--- a/device-akita.mk
++++ b/device-akita.mk
+@@ -429,7 +429,7 @@ PRODUCT_VENDOR_PROPERTIES += \
+ $(call inherit-product, $(SRC_TARGET_DIR)/product/window_extensions.mk)
+ 
+ # Disable Settings large-screen optimization enabled by Window Extensions
+-PRODUCT_SYSTEM_PROPERTIES += \
++PRODUCT_PRODUCT_PROPERTIES += \
+     persist.settings.large_screen_opt.enabled=false
+ 
+ # ETM

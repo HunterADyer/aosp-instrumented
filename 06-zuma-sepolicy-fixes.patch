@@ -1,0 +1,11 @@
+diff --git a/radio/hal_radioext_default.te b/radio/hal_radioext_default.te
+index 25cb7e5..a2d3b9c 100644
+--- a/radio/hal_radioext_default.te
++++ b/radio/hal_radioext_default.te
+@@ -25,5 +25,5 @@ allow hal_radioext_default hal_bluetooth_coexistence_service:service_manager fin
+ # Twoshay
+ binder_use(hal_radioext_default)
+ allow hal_radioext_default gril_antenna_tuning_service:service_manager find;
+-binder_call(hal_radioext_default, gril_antenna_tuning_service)
++# binder_call(hal_radioext_default, gril_antenna_tuning_service) # removed: neverallow conflict
+ binder_call(hal_radioext_default, twoshay)

@@ -1,0 +1,49 @@
+diff --git a/aosp_akita_research.mk b/aosp_akita_research.mk
+new file mode 100644
+index 0000000..f76c164
+--- /dev/null
++++ b/aosp_akita_research.mk
+@@ -0,0 +1,43 @@
++#
++# Copyright 2021 The Android Open-Source Project
++#
++# Licensed under the Apache License, Version 2.0 (the "License");
++# you may not use this file except in compliance with the License.
++# You may obtain a copy of the License at
++#
++#      http://www.apache.org/licenses/LICENSE-2.0
++#
++# Unless required by applicable law or agreed to in writing, software
++# distributed under the License is distributed on an "AS IS" BASIS,
++# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++# See the License for the specific language governing permissions and
++# limitations under the License.
++#
++
++# Inherit everything from stock aosp_akita
++$(call inherit-product, device/google/akita/aosp_akita.mk)
++
++PRODUCT_NAME := aosp_akita_research
++PRODUCT_MODEL := Pixel 8a Research
++
++# ---------------------------------------------------------------------------
++# apktrace — all tracing disabled by default, enabled per-package via CLI
++# ---------------------------------------------------------------------------
++
++PRODUCT_PRODUCT_PROPERTIES += \
++    persist.apktrace.enabled=0 \
++    persist.apktrace.http_port=8642 \
++    persist.apktrace.tls_plaintext=0 \
++    persist.apktrace.tls_keylog=0
++
++# Packages (uncomment as each phase lands)
++# PRODUCT_PACKAGES += \
++#     apktrace_collector \
++#     apktrace_cli
++
++# eBPF programs (uncomment when Phase 4 lands)
++# PRODUCT_PACKAGES += \
++#     apktrace_syscalls.bpf \
++#     apktrace_binder.bpf \
++#     apktrace_sched.bpf \
++#     apktrace_net.bpf
