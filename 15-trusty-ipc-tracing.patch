@@ -1,0 +1,79 @@
+diff --git a/lib/trusty/tipc_dev_ql.c b/lib/trusty/tipc_dev_ql.c
+index 31d4299..cd11815 100644
+--- a/lib/trusty/tipc_dev_ql.c
++++ b/lib/trusty/tipc_dev_ql.c
+@@ -42,6 +42,30 @@
+ 
+ #define LOCAL_TRACE 0
+ 
++/*
++ * TEE IPC tracing — logs all normal world ↔ TA communication.
++ * Output goes to Trusty log buffer → /dev/trusty-log0 on normal world.
++ *
++ * Every connect, send, recv, and disconnect is logged with:
++ *   - Service name (TA port name, e.g. "com.android.trusty.keymint")
++ *   - Message size
++ *   - Client ID (maps to normal world process)
++ *   - Timestamp (Trusty timer ticks)
++ *   - Result code
++ *
++ * Controlled by APKTRACE_TEE_IPC — set to 1 to enable.
++ */
++#define APKTRACE_TEE_IPC 1
++
++#if APKTRACE_TEE_IPC
++#include <platform.h>
++
++#define TEE_TRACE(fmt, ...) \
++    printf("[TEE_IPC] %llu " fmt "\n", current_time_ns() / 1000000ULL, ##__VA_ARGS__)
++#else
++#define TEE_TRACE(fmt, ...) do {} while(0)
++#endif
++
+ /*
+  *  Max number of sync tipc devices
+  */
+@@ -357,6 +381,10 @@ static int dev_connect(struct ql_tipc_dev* dev,
+     /* open ipc channel */
+     rc = ipc_port_connect_async(dev->uuid, (const char*)req.body,
+                                 ns_payload_len - sizeof(req.hdr), 0, &chan);
++
++    TEE_TRACE("CONNECT port=\"%s\" client=0x%" PRIx64 " rc=%d",
++              (const char*)req.body, dev->client_id, rc);
++
+     if (rc != NO_ERROR) {
+         TRACEF("failed to open ipc channel: %d\n", rc);
+         return set_status(dev, opcode, rc, 0);
+@@ -422,6 +450,8 @@ static long dev_disconnect(struct ql_tipc_dev* dev, uint32_t target) {
+     handle_close(ept->chan);
+     free_local_addr(dev, target);
+ 
++    TEE_TRACE("DISCONNECT target=%u client=0x%" PRIx64, target, dev->client_id);
++
+     return set_status(dev, opcode, 0, 0);
+ }
+ 
+@@ -442,7 +472,12 @@ static long dev_send(struct ql_tipc_dev* dev,
+             .num_iov = 1,
+             .num_handles = 0};
+ 
+-    return set_status(dev, opcode, ipc_send_msg(ept->chan, &msg), 0);
++    int send_rc = ipc_send_msg(ept->chan, &msg);
++
++    TEE_TRACE("SEND target=%u size=%zu client=0x%" PRIx64 " rc=%d",
++              target, ns_sz, dev->client_id, send_rc);
++
++    return set_status(dev, opcode, send_rc, 0);
+ }
+ 
+ static long dev_recv(struct ql_tipc_dev* dev, uint32_t target) {
+@@ -471,6 +506,9 @@ static long dev_recv(struct ql_tipc_dev* dev, uint32_t target) {
+     rc = ipc_read_msg(ept->chan, mi.id, 0, &msg);
+     ipc_put_msg(ept->chan, mi.id);
+ 
++    TEE_TRACE("RECV target=%u size=%zu client=0x%" PRIx64 " rc=%d",
++              target, mi.len, dev->client_id, rc);
++
+     if (rc < 0)
+         return set_status(dev, opcode, rc, 0);
+     if (rc < (int)mi.len)
