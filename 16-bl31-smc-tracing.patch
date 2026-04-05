@@ -1,0 +1,48 @@
+diff --git a/services/el3/ven_el3_svc.c b/services/el3/ven_el3_svc.c
+index 32a3dc2..f7cea8d 100644
+--- a/services/el3/ven_el3_svc.c
++++ b/services/el3/ven_el3_svc.c
+@@ -71,6 +71,9 @@ static uintptr_t ven_el3_svc_handler(unsigned int smc_fid,
+ 
+ #endif /* ENABLE_PMF */
+ 
++	NOTICE("[SMC_VEN] fid=0x%x x1=0x%lx x2=0x%lx x3=0x%lx cpu=%u\n",
++	       smc_fid, x1, x2, x3, plat_my_core_pos());
++
+ 	switch (smc_fid) {
+ 	case VEN_EL3_SVC_UID:
+ 		/* Return UID to the caller */
+diff --git a/services/spd/trusty/trusty.c b/services/spd/trusty/trusty.c
+index 3a8fccc..536f779 100644
+--- a/services/spd/trusty/trusty.c
++++ b/services/spd/trusty/trusty.c
+@@ -205,6 +205,9 @@ static uint64_t trusty_set_fiq_handler(void *handle, uint64_t cpu,
+ 	ctx->fiq_handler_cpsr = SMC_GET_EL3(handle, CTX_SPSR_EL3);
+ 	ctx->fiq_handler_sp = stack;
+ 
++	NOTICE("[SMC] SET_FIQ_HANDLER cpu=%lu handler=0x%lx stack=0x%lx cpsr=0x%lx\n",
++	       cpu, handler, stack, ctx->fiq_handler_cpsr);
++
+ 	SMC_RET1(handle, 0);
+ }
+ 
+@@ -261,6 +264,19 @@ static uintptr_t trusty_smc_handler(uint32_t smc_fid,
+ 	struct smc_args ret;
+ 	entry_point_info_t *ep_info = bl31_plat_get_next_image_ep_info(SECURE);
+ 
++	/*
++	 * SMC tracing — log every SMC that enters the Trusty handler.
++	 * This runs at EL3 so we see everything: normal world → secure world
++	 * and secure world → normal world returns.
++	 *
++	 * Output goes to BL31's console (UART / shared log buffer).
++	 * Format: [SMC] fid=0x<id> x1=0x<> x2=0x<> x3=0x<> from=<NS|S> cpu=<n>
++	 */
++	NOTICE("[SMC] fid=0x%x x1=0x%lx x2=0x%lx x3=0x%lx from=%s cpu=%u\n",
++	       smc_fid, x1, x2, x3,
++	       is_caller_secure(flags) ? "S" : "NS",
++	       plat_my_core_pos());
++
+ 	/*
+ 	 * Return success for SET_ROT_PARAMS if Trusty is not present, as
+ 	 * Verified Boot is not even supported and returning success here
