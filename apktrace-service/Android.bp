@@ -1,0 +1,31 @@
+package {
+    default_applicable_licenses: ["Android-Apache-2.0"],
+}
+
+cc_binary {
+    name: "apktrace_collector",
+    srcs: ["apktrace_collector.cpp"],
+    shared_libs: [
+        "libbase",
+        "liblog",
+    ],
+    cflags: [
+        "-Wall",
+        "-Werror",
+        "-Wno-unused-parameter",
+    ],
+    init_rc: ["apktrace_collector.rc"],
+    product_specific: true,
+}
+
+cc_binary {
+    name: "apktrace_cli",
+    stem: "apktrace",
+    srcs: ["apktrace_cli.cpp"],
+    cflags: [
+        "-Wall",
+        "-Werror",
+        "-Wno-unused-parameter",
+    ],
+    product_specific: true,
+}

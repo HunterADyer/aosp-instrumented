@@ -1,0 +1,48 @@
+diff --git a/device.mk b/device.mk
+index 75405ef..1db9457 100644
+--- a/device.mk
++++ b/device.mk
+@@ -667,8 +667,8 @@ PRODUCT_PACKAGES += \
+ 
+ # Battery Mitigation
+ include device/google/gs-common/battery_mitigation/bcl.mk
+-# storage pixelstats
+--include hardware/google/pixel/pixelstats/device.mk
++# storage pixelstats — include sepolicy only, binary is excluded due to API drift
++BOARD_SEPOLICY_DIRS += hardware/google/pixel-sepolicy/pixelstats
+ 
+ # Enable project quotas and casefolding for emulated storage without sdcardfs
+ $(call inherit-product, $(SRC_TARGET_DIR)/product/emulated_storage.mk)
+@@ -760,7 +760,7 @@ PRODUCT_DEFAULT_PROPERTY_OVERRIDES += ro.surface_flinger.use_content_detection_f
+ PRODUCT_DEFAULT_PROPERTY_OVERRIDES += ro.surface_flinger.max_frame_buffer_acquired_buffers=3
+ 
+ PRODUCT_DEFAULT_PROPERTY_OVERRIDES += ro.surface_flinger.supports_background_blur=1
+-PRODUCT_SYSTEM_PROPERTIES += ro.launcher.blur.appLaunch=0
++PRODUCT_PRODUCT_PROPERTIES += ro.launcher.blur.appLaunch=0
+ 
+ # Must align with HAL types Dataspace
+ # The data space of wide color gamut composition preference is Dataspace::DISPLAY_P3
+diff --git a/powerstats/ZumaCommonDataProviders.cpp b/powerstats/ZumaCommonDataProviders.cpp
+index e70ffae..9d4a062 100644
+--- a/powerstats/ZumaCommonDataProviders.cpp
++++ b/powerstats/ZumaCommonDataProviders.cpp
+@@ -71,10 +71,17 @@ class PlaceholderEnergyConsumer : public PowerStats::IEnergyConsumer {
+     }
+     std::pair<EnergyConsumerType, std::string> getInfo() override { return {kType, kName}; }
+ 
+-    std::optional<EnergyConsumerResult> getEnergyConsumed() override {
++    std::optional<EnergyConsumerResult> getEnergyConsumed(
++            const std::vector<EnergyMeasurement> &energyData) override {
+         int64_t totalEnergyUWs = 0;
+         int64_t timestampMs = 0;
+-        if (mChannelId != -1) {
++        // Use provided energyData if available, otherwise read from meter
++        if (!energyData.empty()) {
++            for (const auto &m : energyData) {
++                totalEnergyUWs += m.energyUWs;
++                timestampMs = m.timestampMs;
++            }
++        } else if (mChannelId != -1) {
+             std::vector<EnergyMeasurement> measurements;
+             if (mPowerStats->readEnergyMeter({mChannelId}, &measurements).isOk()) {
+                 for (const auto &m : measurements) {
