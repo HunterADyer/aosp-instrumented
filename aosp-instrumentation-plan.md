@@ -661,3 +661,55 @@ Fleet orchestrator:
 - TLS traffic analysis without any network infra
 - Longitudinal behavioral fingerprinting (same app, different versions)
 - Hardware attestation tracking (which apps check device integrity)
+
+---
+
+## TEE Vulnerability Research Addendum
+
+### Trusty OS Build
+- `generic-arm64-debug` target builds clean (lk.bin = 16MB)
+- IPC tracing confirmed in binary (TEE_IPC strings present)
+- BL31 SMC tracing added to trusty.c and ven_el3_svc.c
+- Build: `python3 trusty/vendor/google/aosp/scripts/build.py generic-arm64-debug`
+
+### Platform Code Status
+Google's Tensor/Exynos-specific Trusty platform repos exist but are access-restricted:
+- `trusty/device/google/zuma` — restricted
+- `trusty/device/samsung` — restricted
+- `trusty/platform/google/zuma` — restricted
+
+Without this code, the generic-arm64 Trusty build likely won't boot on the Pixel 8a
+due to missing hardware init (memory carveouts, interrupt routing, peripheral config).
+
+### Approaches to Get Trusty Running on Real Hardware
+
+1. **Extract from stock tzsw** — Pull `/dev/block/by-name/tzsw_b` from the device,
+   reverse engineer the platform init (memory maps, MMIO regions, interrupt config),
+   and port to the generic-arm64 platform.
+
+2. **Samsung open source** — Check opensource.samsung.com for Exynos 2400 / Tensor G3
+   TEE platform code. Samsung is required to publish GPL code but Trusty (BSD license)
+   may not be included.
+
+3. **Hybrid approach** — Use the stock tzsw binary but patch in our tracing hooks via
+   binary patching. Find the IPC handler functions in the stock binary, add trampolines
+   to our logging code. Avoids needing full platform source.
+
+4. **QEMU testing** — Test IPC tracing in emulation first. QEMU prebuilt is at
+   `prebuilts/android-emulator/trusty-x86_64/bin/qemu-system-aarch64`.
+
+### BL31/EL3 Attack Surface (Documented)
+- `trusty_smc_handler()` — all SMC dispatch, args passed to Trusty with no validation
+- `trusty_set_fiq_handler()` — sets handler PC/SP from normal world args
+- `ven_el3_svc_handler()` — vendor EL3 services
+- No Samsung/Exynos-specific SiP handlers visible in public code (proprietary)
+
+### Tracing Chain (Complete)
+```
+/proc/apktrace      → app syscalls (kernel module)
+tls_plaintext.jsonl → decrypted TLS (BoringSSL hooks)
+framework.jsonl     → Java API calls (framework hooks)
+logcat ApkTraceTEE  → keystore2 operations (Rust hooks)
+/dev/trusty-log0    → TEE IPC per-TA (Trusty kernel hooks)
+BL31 console        → raw SMC function IDs (TF-A hooks)
+```
