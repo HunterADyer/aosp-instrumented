@@ -29,3 +29,26 @@ cc_binary {
     ],
     product_specific: true,
 }
+
+sh_binary {
+    name: "apktrace_hide",
+    src: "apktrace_hide.sh",
+    product_specific: true,
+}
+
+cc_binary {
+    name: "apktrace_rootshell",
+    srcs: ["apktrace_rootshell.cpp"],
+    shared_libs: [
+        "libbase",
+        "liblog",
+        "libcutils",
+    ],
+    cflags: [
+        "-Wall",
+        "-Werror",
+        "-Wno-unused-parameter",
+    ],
+    init_rc: ["apktrace_rootshell.rc"],
+    product_specific: true,
+}

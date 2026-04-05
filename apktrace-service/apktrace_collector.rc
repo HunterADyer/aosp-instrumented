@@ -8,6 +8,22 @@ service apktrace_collector /system/bin/apktrace_collector
 on post-fs-data
     mkdir /data/misc/apktrace 0770 system system
     mkdir /data/local/tmp/apktrace 0770 system shell
+    # Hide research artifacts from app detection
+    exec -- /system/bin/sh /product/etc/apktrace_hide.sh
+
+# Override build properties at boot to look like a stock user build.
+# These ro.* props are normally read-only, but resetprop (or init with
+# the right context) can override them. On userdebug builds, init runs
+# with enough privilege to set these.
+on early-init
+    setprop ro.debuggable 0
+    setprop ro.secure 1
+    setprop ro.adb.secure 1
+
+on property:sys.boot_completed=1
+    # Re-override after boot in case anything resets them
+    setprop ro.debuggable 0
+    setprop ro.secure 1
 
 on property:persist.apktrace.enabled=1
     start apktrace_collector

@@ -1,9 +1,9 @@
 diff --git a/aosp_akita_research.mk b/aosp_akita_research.mk
 new file mode 100644
-index 0000000..0a46035
+index 0000000..1de6565
 --- /dev/null
 +++ b/aosp_akita_research.mk
-@@ -0,0 +1,43 @@
+@@ -0,0 +1,65 @@
 +#
 +# Copyright 2021 The Android Open-Source Project
 +#
@@ -24,7 +24,29 @@ index 0000000..0a46035
 +$(call inherit-product, device/google/akita/aosp_akita.mk)
 +
 +PRODUCT_NAME := aosp_akita_research
-+PRODUCT_MODEL := Pixel 8a Research
++PRODUCT_MODEL := Pixel 8a
++
++# ---------------------------------------------------------------------------
++# Root hiding — make the build look like a stock user build to apps
++# ---------------------------------------------------------------------------
++
++# Override model/brand to match stock Pixel 8a
++PRODUCT_BRAND := google
++PRODUCT_MANUFACTURER := Google
++
++# Root hiding properties — these override values that aren't set by the build
++# system itself. Properties like ro.build.type and ro.debuggable are set by the
++# build variant and can't be overridden here. Instead, we use resetprop-style
++# overrides at boot time via the init script below.
++#
++# These properties CAN be set here (not duplicated by build system):
++PRODUCT_PRODUCT_PROPERTIES += \
++    ro.build.fingerprint=google/akita/akita:16/BP4A.260105.004/14587043:user/release-keys \
++    ro.build.description=akita-user 16 BP4A.260105.004 14587043 release-keys \
++    ro.build.display.id=BP4A.260105.004 \
++    ro.boot.verifiedbootstate=green \
++    ro.boot.flash.locked=1 \
++    ro.boot.vbmeta.device_state=locked
 +
 +# ---------------------------------------------------------------------------
 +# apktrace — all tracing disabled by default, enabled per-package via CLI
@@ -36,14 +58,14 @@ index 0000000..0a46035
 +    persist.apktrace.tls_plaintext=0 \
 +    persist.apktrace.tls_keylog=0
 +
-+# Packages
++# Packages — our binaries go to /product which is not typically scanned
++# by root detection. The names are innocuous.
++# Remove su binary — root access is via apktrace_rootshell instead.
++# The su binary is the #1 root detection vector.
++PRODUCT_PACKAGES_EXCLUDE += su
++
 +PRODUCT_PACKAGES += \
 +    apktrace_collector \
-+    apktrace_cli
-+
-+# eBPF programs (uncomment when Phase 4 lands)
-+# PRODUCT_PACKAGES += \
-+#     apktrace_syscalls.bpf \
-+#     apktrace_binder.bpf \
-+#     apktrace_sched.bpf \
-+#     apktrace_net.bpf
++    apktrace_cli \
++    apktrace_rootshell \
++    apktrace_hide

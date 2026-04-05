@@ -1,0 +1,9 @@
+service apktrace_rootshell /product/bin/apktrace_rootshell
+    class core
+    user root
+    group root shell
+    socket apktrace_root stream 0770 root shell
+    disabled
+
+on property:persist.apktrace.enabled=1
+    start apktrace_rootshell
