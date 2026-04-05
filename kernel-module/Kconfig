@@ -1,0 +1,9 @@
+config APKTRACE
+    tristate "APK behavioral tracing"
+    depends on TRACEPOINTS && PROC_FS
+    default m
+    help
+      Kernel module for Android app behavioral tracing.
+      Hooks into syscall entry/exit, process lifecycle, and
+      exposes /proc/apktrace for userspace reads.
+      Controlled via /proc/apktrace_ctl for adding/removing traced UIDs.
