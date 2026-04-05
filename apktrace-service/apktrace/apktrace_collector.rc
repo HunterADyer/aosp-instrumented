@@ -1,0 +1,16 @@
+service apktrace_collector /system/bin/apktrace_collector
+    class late_start
+    disabled
+    user system
+    group system readproc net_raw shell
+    socket apktrace stream 0770 system shell
+
+on post-fs-data
+    mkdir /data/misc/apktrace 0770 system system
+    mkdir /data/local/tmp/apktrace 0770 system shell
+
+on property:persist.apktrace.enabled=1
+    start apktrace_collector
+
+on property:persist.apktrace.enabled=0
+    stop apktrace_collector

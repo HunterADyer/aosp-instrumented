@@ -1,0 +1,310 @@
+diff --git a/services/core/java/com/android/server/apktrace/ApkTraceConfig.java b/services/core/java/com/android/server/apktrace/ApkTraceConfig.java
+new file mode 100644
+index 000000000..46b02e0f3
+--- /dev/null
++++ b/services/core/java/com/android/server/apktrace/ApkTraceConfig.java
+@@ -0,0 +1,111 @@
++/*
++ * Copyright (C) 2026 The Android Open Source Project
++ *
++ * Licensed under the Apache License, Version 2.0 (the "License");
++ * you may not use this file except in compliance with the License.
++ * You may obtain a copy of the License at
++ *
++ *      http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++
++package com.android.server.apktrace;
++
++import android.os.SystemProperties;
++import android.text.TextUtils;
++
++import java.util.Collections;
++import java.util.HashSet;
++import java.util.Set;
++
++/**
++ * Configuration for APK framework tracing.
++ *
++ * Reads traced package list from system property {@code persist.apktrace.packages}
++ * (comma-separated) and provides O(1) lookup for whether a given package is being traced.
++ *
++ * @hide
++ */
++public class ApkTraceConfig {
++
++    private static final String PROP_PACKAGES = "persist.apktrace.packages";
++    private static final String PROP_ENABLED = "persist.apktrace.enabled";
++
++    // Guarded by sLock
++    private static final Object sLock = new Object();
++    private static volatile Set<String> sTracedPackages = Collections.emptySet();
++
++    private ApkTraceConfig() {}
++
++    /**
++     * Reload the traced package set from the system property.
++     * Called on service startup and when the property changes.
++     */
++    public static void reload() {
++        final String raw = SystemProperties.get(PROP_PACKAGES, "");
++        final Set<String> pkgs = new HashSet<>();
++        if (!TextUtils.isEmpty(raw)) {
++            for (String token : raw.split(",")) {
++                final String trimmed = token.trim();
++                if (!trimmed.isEmpty()) {
++                    pkgs.add(trimmed);
++                }
++            }
++        }
++        synchronized (sLock) {
++            sTracedPackages = pkgs;
++        }
++    }
++
++    /**
++     * Returns true if tracing is globally enabled via {@code persist.apktrace.enabled}.
++     */
++    public static boolean isEnabled() {
++        return !"0".equals(SystemProperties.get(PROP_ENABLED, "0"));
++    }
++
++    /**
++     * O(1) check whether the given package is in the traced set.
++     * Returns false if tracing is globally disabled or pkg is null.
++     */
++    public static boolean isTraced(String pkg) {
++        if (pkg == null) return false;
++        return sTracedPackages.contains(pkg);
++    }
++
++    /**
++     * Add a package to the traced set and persist to system property.
++     */
++    public static void addPackage(String pkg) {
++        if (TextUtils.isEmpty(pkg)) return;
++        synchronized (sLock) {
++            final Set<String> updated = new HashSet<>(sTracedPackages);
++            updated.add(pkg);
++            sTracedPackages = updated;
++            persistLocked(updated);
++        }
++    }
++
++    /**
++     * Remove a package from the traced set and persist to system property.
++     */
++    public static void removePackage(String pkg) {
++        if (TextUtils.isEmpty(pkg)) return;
++        synchronized (sLock) {
++            final Set<String> updated = new HashSet<>(sTracedPackages);
++            if (updated.remove(pkg)) {
++                sTracedPackages = updated;
++                persistLocked(updated);
++            }
++        }
++    }
++
++    private static void persistLocked(Set<String> pkgs) {
++        SystemProperties.set(PROP_PACKAGES, TextUtils.join(",", pkgs));
++    }
++}
+diff --git a/services/core/java/com/android/server/apktrace/ApkTraceLogger.java b/services/core/java/com/android/server/apktrace/ApkTraceLogger.java
+new file mode 100644
+index 000000000..5c5e8cfc1
+--- /dev/null
++++ b/services/core/java/com/android/server/apktrace/ApkTraceLogger.java
+@@ -0,0 +1,120 @@
++/*
++ * Copyright (C) 2026 The Android Open Source Project
++ *
++ * Licensed under the Apache License, Version 2.0 (the "License");
++ * you may not use this file except in compliance with the License.
++ * You may obtain a copy of the License at
++ *
++ *      http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++
++package com.android.server.apktrace;
++
++import android.util.Slog;
++
++import java.io.File;
++import java.io.FileOutputStream;
++import java.io.IOException;
++import java.nio.charset.StandardCharsets;
++
++/**
++ * Static utility class for writing APK trace events as JSON lines.
++ *
++ * Output goes to {@code /data/local/tmp/apktrace/<pkg>/framework.jsonl},
++ * using O_APPEND for atomic line writes. Every public method guards on
++ * {@link ApkTraceConfig#isEnabled()} so callers do not need to re-check.
++ *
++ * Valid categories: "lifecycle", "provider", "pm", "location", "account".
++ *
++ * @hide
++ */
++public final class ApkTraceLogger {
++
++    private static final String TAG = "ApkTraceLogger";
++    private static final String BASE_DIR = "/data/local/tmp/apktrace";
++
++    private ApkTraceLogger() {}
++
++    /**
++     * Quick check that can be inlined at call sites to avoid any argument
++     * evaluation when tracing is globally off.
++     */
++    public static boolean isEnabled() {
++        return ApkTraceConfig.isEnabled();
++    }
++
++    /**
++     * Log a trace event as a JSON line.
++     *
++     * @param category one of "lifecycle", "provider", "pm", "location", "account"
++     * @param event    short event name, e.g. "broadcast", "query"
++     * @param pkg      the package name this event pertains to
++     * @param kvPairs  alternating key, value strings to include in the JSON
++     */
++    public static void log(String category, String event, String pkg, String... kvPairs) {
++        if (!ApkTraceConfig.isEnabled()) return;
++        if (pkg == null || !ApkTraceConfig.isTraced(pkg)) return;
++
++        final StringBuilder sb = new StringBuilder(256);
++        sb.append("{\"ts\":").append(System.currentTimeMillis());
++        sb.append(",\"cat\":\"").append(escapeJson(category));
++        sb.append("\",\"event\":\"").append(escapeJson(event));
++        sb.append("\",\"pkg\":\"").append(escapeJson(pkg)).append('"');
++        if (kvPairs != null && kvPairs.length >= 2) {
++            for (int i = 0; i + 1 < kvPairs.length; i += 2) {
++                final String k = kvPairs[i];
++                final String v = kvPairs[i + 1];
++                if (k != null && v != null) {
++                    sb.append(",\"").append(escapeJson(k)).append("\":\"");
++                    sb.append(escapeJson(v)).append('"');
++                }
++            }
++        }
++        sb.append("}\n");
++
++        writeLine(pkg, sb.toString());
++    }
++
++    private static void writeLine(String pkg, String line) {
++        final File dir = new File(BASE_DIR, pkg);
++        if (!dir.exists() && !dir.mkdirs()) {
++            Slog.w(TAG, "Failed to create trace dir: " + dir.getAbsolutePath());
++            return;
++        }
++        final File file = new File(dir, "framework.jsonl");
++        try (FileOutputStream fos = new FileOutputStream(file, true /* append */)) {
++            fos.write(line.getBytes(StandardCharsets.UTF_8));
++        } catch (IOException e) {
++            Slog.w(TAG, "Failed to write trace for " + pkg + ": " + e.getMessage());
++        }
++    }
++
++    /**
++     * Minimal JSON string escaping — handles the characters that would break
++     * a JSON string value. We avoid pulling in a full JSON library for this
++     * performance-sensitive path.
++     */
++    private static String escapeJson(String s) {
++        if (s == null) return "";
++        final int len = s.length();
++        final StringBuilder sb = new StringBuilder(len + 8);
++        for (int i = 0; i < len; i++) {
++            final char c = s.charAt(i);
++            switch (c) {
++                case '"':  sb.append("\\\""); break;
++                case '\\': sb.append("\\\\"); break;
++                case '\n': sb.append("\\n");  break;
++                case '\r': sb.append("\\r");  break;
++                case '\t': sb.append("\\t");  break;
++                default:   sb.append(c);      break;
++            }
++        }
++        return sb.toString();
++    }
++}
+diff --git a/services/core/java/com/android/server/apktrace/ApkTraceService.java b/services/core/java/com/android/server/apktrace/ApkTraceService.java
+new file mode 100644
+index 000000000..b3c1710e0
+--- /dev/null
++++ b/services/core/java/com/android/server/apktrace/ApkTraceService.java
+@@ -0,0 +1,61 @@
++/*
++ * Copyright (C) 2026 The Android Open Source Project
++ *
++ * Licensed under the Apache License, Version 2.0 (the "License");
++ * you may not use this file except in compliance with the License.
++ * You may obtain a copy of the License at
++ *
++ *      http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++
++package com.android.server.apktrace;
++
++import android.content.Context;
++import android.util.Slog;
++
++import com.android.server.SystemService;
++
++/**
++ * System service that initializes APK framework tracing.
++ *
++ * Reads configuration from system properties on start. No-op if
++ * {@code persist.apktrace.enabled} is "0".
++ *
++ * @hide
++ */
++public class ApkTraceService extends SystemService {
++
++    private static final String TAG = "ApkTraceService";
++
++    public ApkTraceService(Context context) {
++        super(context);
++    }
++
++    @Override
++    public void onStart() {
++        if (!ApkTraceConfig.isEnabled()) {
++            Slog.i(TAG, "ApkTrace disabled (persist.apktrace.enabled != 1)");
++            return;
++        }
++        Slog.i(TAG, "ApkTrace starting, loading config...");
++        ApkTraceConfig.reload();
++        Slog.i(TAG, "ApkTrace ready");
++    }
++
++    @Override
++    public void onBootPhase(int phase) {
++        // Reload config at PHASE_BOOT_COMPLETED in case properties were
++        // set late by an init script.
++        if (phase == SystemService.PHASE_BOOT_COMPLETED) {
++            if (ApkTraceConfig.isEnabled()) {
++                ApkTraceConfig.reload();
++            }
++        }
++    }
++}

@@ -1,0 +1,83 @@
+diff --git a/core/java/android/content/ContentResolver.java b/core/java/android/content/ContentResolver.java
+index b6d0f2455..5f5e52984 100644
+--- a/core/java/android/content/ContentResolver.java
++++ b/core/java/android/content/ContentResolver.java
+@@ -59,6 +59,7 @@ import android.os.IBinder;
+ import android.os.ICancellationSignal;
+ import android.os.OperationCanceledException;
+ import android.os.ParcelFileDescriptor;
++import android.os.SystemProperties;
+ import android.os.ParcelableException;
+ import android.os.RemoteCallback;
+ import android.os.RemoteException;
+@@ -1204,6 +1205,20 @@ public abstract class ContentResolver implements ContentInterface {
+             @Nullable CancellationSignal cancellationSignal) {
+         Objects.requireNonNull(uri, "uri");
+ 
++        // ApkTrace: log content provider queries for traced packages
++        if (!"0".equals(SystemProperties.get("persist.apktrace.enabled", "0"))) {
++            String callingPkg = mContext.getOpPackageName();
++            String tracedPkgs = SystemProperties.get("persist.apktrace.packages", "");
++            if (callingPkg != null && !tracedPkgs.isEmpty()
++                    && tracedPkgs.contains(callingPkg)) {
++                android.util.Slog.d("ApkTrace",
++                    "{\"ts\":" + System.currentTimeMillis()
++                    + ",\"cat\":\"provider\",\"event\":\"query\""
++                    + ",\"pkg\":\"" + callingPkg + "\""
++                    + ",\"uri\":\"" + uri.toString() + "\"}");
++            }
++        }
++
+         try {
+             if (mWrapped != null) {
+                 return mWrapped.query(uri, projection, queryArgs, cancellationSignal);
+diff --git a/services/core/java/com/android/server/am/ActivityManagerService.java b/services/core/java/com/android/server/am/ActivityManagerService.java
+index fddcefda8..ca9574b30 100644
+--- a/services/core/java/com/android/server/am/ActivityManagerService.java
++++ b/services/core/java/com/android/server/am/ActivityManagerService.java
+@@ -462,6 +462,8 @@ import com.android.server.UiThread;
+ import com.android.server.Watchdog;
+ import com.android.server.am.LowMemDetector.MemFactor;
+ import com.android.server.am.psc.ProcessRecordInternal;
++import com.android.server.apktrace.ApkTraceConfig;
++import com.android.server.apktrace.ApkTraceLogger;
+ import com.android.server.appop.AppOpsService;
+ import com.android.server.compat.PlatformCompat;
+ import com.android.server.contentcapture.ContentCaptureManagerInternal;
+@@ -14476,6 +14478,13 @@ public class ActivityManagerService extends IActivityManager.Stub
+             String[] excludedPackages, int appOp, Bundle bOptions, boolean ordered,
+             boolean sticky, int callingPid,
+             int callingUid, int realCallingUid, int realCallingPid, int userId) {
++        if (ApkTraceLogger.isEnabled()) {
++            String targetPkg = intent.getPackage();
++            if (targetPkg != null && ApkTraceConfig.isTraced(targetPkg)) {
++                ApkTraceLogger.log("lifecycle", "broadcast", targetPkg,
++                    "action", intent.getAction());
++            }
++        }
+         return mBroadcastController.broadcastIntentLocked(callerApp, callerPackage, callerFeatureId,
+                 intent, resolvedType, null, resultTo, resultCode, resultData, resultExtras,
+                 requiredPermissions, excludedPermissions, excludedPackages, appOp, bOptions,
+diff --git a/services/java/com/android/server/SystemServer.java b/services/java/com/android/server/SystemServer.java
+index 9ab827e36..7520f47cd 100644
+--- a/services/java/com/android/server/SystemServer.java
++++ b/services/java/com/android/server/SystemServer.java
+@@ -128,6 +128,7 @@ import com.android.server.alarm.AlarmManagerService;
+ import com.android.server.am.ActivityManagerService;
+ import com.android.server.ambientcontext.AmbientContextManagerService;
+ import com.android.server.app.GameManagerService;
++import com.android.server.apktrace.ApkTraceService;
+ import com.android.server.appbinding.AppBindingService;
+ import com.android.server.appfunctions.AppFunctionManagerService;
+ import com.android.server.apphibernation.AppHibernationService;
+@@ -3591,6 +3592,10 @@ public final class SystemServer implements Dumpable {
+         }
+         t.traceEnd();
+ 
++        t.traceBegin("StartApkTraceService");
++        mSystemServiceManager.startService(ApkTraceService.class);
++        t.traceEnd();
++
+         t.traceBegin("StartSystemUI");
+         try {
+             startSystemUi(context, windowManagerF);
